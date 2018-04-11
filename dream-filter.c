@@ -70,9 +70,6 @@ void filter_p6(int input)
 {
 	char buf[6], check, max;
 	int x, y, i;
-	char framex, framey;
-	//Сделаем, чтобы разрешение было
-	//кратно 3
 	short **rgb[3];
 	char l;
 	check = read(input, buf, 1);
@@ -100,25 +97,25 @@ void filter_p6(int input)
 	y = read_until_space(input, buf, '\n', 0);
 	//Читаем количество строк
 	max = read_until_space(input, buf, '\n', 0);
-	framex = x % 3;
-	framey = y % 3;
-	//Сколько не хватает до кратности
+	x += 2;
+	y += 2;
+	//Чтобы с рамкой в 1 пиксель
 	for (i = 0; i < 3; i++) {
-			rgb[i] = malloc(2 * (y + framey));
-			for (int j = y + framey - 1; j >= 0; j--)
-				rgb[i][j] = malloc(2 * (x + framey));  
-		}
+			rgb[i] = malloc(2 * y));
+			for (int j = 0; j < y; j--)
+				rgb[i][j] = malloc(2 * x);  
+	}
+	//Выделим память под матрицы
 	for (i = 0; i < 3; i++)
-		for (int j = 0; j < framey; j++)
-			for(int k = x + framex - 1; k >= 0; k--)
-				rgb[i][j][k] = 0;
-	for (i = 0; i < 3; i++)
-		for (int j = framey + y - 1; j >= framey; j--)
-			for(int k = 0; k < framex; k++)
-				rgb[i][j][k] = 0;
-	//Лишние строки и столбцы 
-	//(которые нужны для кратности 3-м)
-	//заполним нулями
+		for (int j = 0; j < y; j++)
+			rgb[i][j][0] = 0;
+			rgb[i][j][x] = 0;
+		for (int j = 1; j < (x - 1); j++)
+			rgb[i][0][j] = 0;
+			rgb[i][y][j] = 0;
+	//Сделаем рамку из 0
+	//толщиной в 1 пиксель
+	
 }
 
 int main(int argc, char *argv[])
