@@ -42,6 +42,7 @@
 //Чтобы читать число от 0 до
 //65535 в буфер, размером 6 
 //байт из файла
+int f;
 int read_until_space(int input, char* buf, char space, char i)
 {
 	int value;
@@ -69,11 +70,26 @@ int read_until_space(int input, char* buf, char space, char i)
 	return value;
 }
 
-void sobel(short** m, int x, int y, int max)
+short** sobel(short** m, int x, int y, int max)
 {
 	short new_max = 0, op[3][3] = {{-1, -2, -1},{0, 0, 0},{1, 2, 1}};
+	short *temp[3];
+	//Массив под указатели на последние 3
+	//новые строки
+	int tempindex;
+	short **stripes_1y = (short **) malloc(sizeof(short*) * 2);
+	//Массив под указатели на первую
+	//и последнюю строку
 	
-	for (int i = 1; i < y; i++)
+	IF_ERR(stripes_1y, NULL, "Malloc error", exit(errno););
+	for (int i = 1; true; i++) {
+		tempindex = i % 3;
+		//В массиве 3 места. Пишем по индексу
+		//отстку от деления номера текущей строки
+		//на 3
+		temp[tempindex] = malloc(sizeof(short*) * (x + 1));
+		//Память под новую строку
+		IF_ERR(temp[tempindex], NULL, "Malloc error", exit(errno););
 		for (int j = 1; j < x; j++) {
 			int gx = 0, gy = 0, g;
 			for (int gi = 0; gi < 3; gi++)
@@ -88,20 +104,70 @@ void sobel(short** m, int x, int y, int max)
 				new_max = g;
 			//В итоге яркость может оказаться больше,
 			//Чем максимальная, которая была
-			m[i][j] = g;
+			temp[tempindex][j] = g;
 		}
-	if (new_max > max)
+		switch(i) {
+		case 1: 
+			stripes_1y[0] = temp[1];
+			break;
+		//Если у нас первая строка, указатель
+		//на нее надо сохранить
+		case 3:
+		case 2:
+			break;
+		//Здесь ничего не надо делать
+		default: 
+			free(m[i - 2]);
+			m[i - 2] = temp[(i - 2) % 3];
+			break;
+		}
+		//Заменяем в картинке старую строку
+		//на новую. Заменяем позапрошлую
+		//строку (она больше не нужна)
+		if (i == (y - 1)) {
+			free(m[i - 1]);
+			m[i - 1] = temp[(i - 1) % 3];
+			stripes_1y[1] = temp[tempindex];
+			break;
+		}
+		//Если мы на последней строке, заменяем
+		//и прошлую. А еще сохраняем индекс
+	}		
+	printf("Maximum brightness = %d\n", new_max);
+	if (new_max > max) {
 	//Если яркость оказалась больше, чем надо
 	//убавим
-		for (int i = 1; i < y; i++)
-			for (int j = 1; j < x; j++)
-				m[i][j] = (((float) m[i][j]) / new_max) * max;
+		if (f) {
+			for (int j = 1; j < x; j++) {
+				stripes_1y[0][j] = (((float) stripes_1y[0][j]) / new_max) * max;
+				stripes_1y[1][j] = (((float) stripes_1y[1][j]) / new_max) * max;
+			}
+			y--;
+			for (int i = 2; i < y; i++)
+				for (int j = 1; j < x; j++)
+					m[i][j] = (((float) m[i][j]) / new_max) * max;
+		} else {
+			for (int j = 1; j < x; j++) {
+				if(stripes_1y[0][j])
+					stripes_1y[0][j] = max;
+				if(stripes_1y[1][j])
+					stripes_1y[1][j] = max;
+			}
+			y--;
+			for (int i = 2; i < y; i++)
+				for (int j = 1; j < x; j++)
+					if(m[i][j] > max)
+						m[i][j] = max;
+		}
+	}
+	return stripes_1y;
 }
 
 void filter_p6(int input, char* input_file)
 {
-	char buf[6], check, max, *out_file, strx[6], stry[6];
-	int x, y, i, out;
+	char buf[6], check, *out_file, strx[6], stry[6];
+	int x, y, i, out, max;
+	short **stripes_1y;
 	short **rgb[3];
 	char pix_size;
 	check = read(input, buf, 1);
@@ -114,7 +180,7 @@ void filter_p6(int input, char* input_file)
 	//На следующей строке может быть комментарий
 	if (strx[0] == '#') {
 		do {
-			check = read(input, strx + i, 1);
+			check = read(input, strx, 1);
 			IF_ERR(check, -1, "Read error", exit(errno););
 			IS_BAD(!check);
 		} while (strx[0] != '\n');
@@ -136,8 +202,14 @@ void filter_p6(int input, char* input_file)
 	//Чтобы с рамкой в 1 пиксель
 	for (i = 0; i < 3; i++) {
 		rgb[i] = (short**) malloc(sizeof(short*) * y);
-		for (int j = 0; j < y; j++)
-			rgb[i][j] = malloc(2 * x);  
+		//Выделяем память под массив строк
+		IF_ERR(rgb[i], NULL, "Malloc error", exit(errno););
+		for (int j = 0; j < y; j++) {
+			rgb[i][j] = malloc(2 * x);
+			//В каждей элемент массива строк 
+			//Указатель на строку
+			IF_ERR(rgb[i][j], NULL, "Malloc error", exit(errno););
+		}
 	}
 	//Выделим память под матрицы
 	x--;
@@ -180,10 +252,22 @@ void filter_p6(int input, char* input_file)
 				//меньше пикселей, чем обещано
 				//но это не должно стать преградой
 	}
-	for (i = 0; i < 3; i++)
-		sobel(rgb[i], x, y, max);
+	for (i = 0; i < 3; i++) {
+		stripes_1y = sobel(rgb[i], x, y, max);
+		//Фильтрация возвращает указатели
+		//на первую и последниюю новуй строку картинки,
+		//их она не заменяет на отфильтрованное сама
+		free(rgb[i][1]);
+		rgb[i][1] = stripes_1y[0];
+		//Заменяем первую строку на новую
+		free(rgb[i][y - 1]);
+		rgb[i][y - 1] = stripes_1y[1];
+		//Заменяем последнуюю строку на новую
+		free(stripes_1y);
 	//Фильтруем
+	}
 	out_file = malloc(strlen(input_file) + 5);
+	IF_ERR(out_file, NULL, "Malloc error", exit(errno););
 	strcpy(out_file, input_file);
 	strcat(out_file, ".out");
 	//Сделаем емя выходного файла
@@ -213,17 +297,28 @@ void filter_p6(int input, char* input_file)
 			free(rgb[i][j]);  
 		free(rgb[i]);
 	}
+	//Освободим память
 }
+
+//Телятников, группа 3О-309Б
 
 int main(int argc, char *argv[])
 {
 	int input;
 	char buf[2];
+	
+	f = 0;
 	if (argc == 1) {
 		printf("Error: there is no arguments\n");
 		exit(EXIT_FAILURE);
 	}
 	//Проверяем а есть ли аргументы
+	if (argc > 2)
+		if (!strcmp(argv[2], "-n"))
+			f = 1;
+	//Флаг - использовать нормализацию
+	//вместо метода, который я не придумал
+	//как назвать
 	input = open(argv[1], O_RDONLY);
 	IF_ERR(input, -1, argv[1], exit(errno););
 	//Открываем файл, если он есть
