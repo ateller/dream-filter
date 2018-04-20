@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-fsanitize=address -g -lm
+CFLAGS=-fsanitize=address -g -lm -lpthread -D_REENTRANT
 
 dream-archiver: dream-filter.c
 	$(CC) -o dream-filter dream-filter.c $(CFLAGS)

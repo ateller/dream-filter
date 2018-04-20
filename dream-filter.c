@@ -1,4 +1,5 @@
-
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -47,7 +48,17 @@
 //Чтобы читать число от 0 до
 //65535 в буфер, размером 6
 //байт из файла
-int f;
+int f, n_of_thr;
+
+struct sems_for_neigh {sem_t prv; sem_t nxt;};
+
+struct args {short ***mtrx;
+int x;
+int start;
+int end;
+int max;
+int col_amount;
+struct sems_for_neigh *s;};
 
 int read_until_space(int input, char *buf, char space, char i)
 {
@@ -171,13 +182,45 @@ short **sobel(short **m, int x, int y, int max)
 	return stripes_1y;
 }
 
+void *sobel_in_th(void *pointer)
+{
+	struct args *a = (struct args *) pointer;
+	short **stripes_1y;
+	
+	IF_ERR(sem_init(&(a->s->prv), 1, 0), -1, "Sem_init", exit(errno););
+	IF_ERR(sem_init(&(a->s->nxt), 1, 0), -1, "Sem_init", exit(errno););
+	for (int i = 0; i < a->col_amount; i++)
+	{
+		stripes_1y = sobel(a->mtrx[i] + a->start, a->x, a->end, a->max);
+		//Фильтрация возвращает указатели
+		//на первую и последниюю
+		//новую строку картинки,
+		//их она не заменяет на новое сама
+		sem_post(&a->s->prv);
+		sem_post(&a->s->nxt);
+		sem_wait(&(a->s - 1)->nxt);
+		free(a->mtrx[i][a->start + 1]);
+		a->mtrx[i][a->start + 1] = stripes_1y[0];
+		//Заменяем первую строку на новую
+		sem_wait(&(a->s + 1)->prv);
+		free(a->mtrx[i][a->end + a->start - 1]);
+		a->mtrx[i][a->end + a->start - 1] = stripes_1y[1];
+		//Заменяем последнуюю строку
+		free(stripes_1y);
+	}
+}
+
+
 void filter_p6(int input, char *input_file)
 {
 	char buf[6], check, *out_nm, strx[6], stry[6];
-	int x, y, i, out, max;
+	int x, y, i, out, max, str_per_th, thr_j;
 	short **stripes_1y;
 	short **rgb[3];
 	char pix_size;
+	struct sems_for_neigh *sems;
+	struct args *a;
+	pthread_t *ths;
 
 	check = read(input, buf, 1);
 	IF_ERR(check, -1, "Read error", exit(errno););
@@ -262,6 +305,7 @@ void filter_p6(int input, char *input_file)
 				//пикселей, чем обещано
 				//но это не должно помешать
 	}
+	/*
 	for (i = 0; i < 3; i++) {
 		stripes_1y = sobel(rgb[i], x, y, max);
 		//Фильтрация возвращает указатели
@@ -277,6 +321,66 @@ void filter_p6(int input, char *input_file)
 		free(stripes_1y);
 	//Фильтруем
 	}
+	*/
+	if (n_of_thr > (y - 1))
+		n_of_thr = y - 1;
+	sems = malloc(sizeof(struct sems_for_neigh) * (n_of_thr + 2));
+	//Массив семафоров
+	IF_ERR(sems, NULL, "Malloc error", exit(errno););
+	a = malloc(sizeof(struct args) * n_of_thr);
+	//Массив параметров
+	IF_ERR(a, NULL, "Malloc error", exit(errno););
+	IF_ERR(sem_init(&sems[0].nxt, 1, 3), -1, "Sem_init", exit(errno););
+	IF_ERR(sem_init(&sems[n_of_thr + 1].prv, 1, 3), -1, "Error", exit(errno););
+	//Два крайних уже на финише
+	str_per_th = ((y - 1) / n_of_thr) + 0.5;
+	//Строк на поток
+	thr_j = (y - 1) % str_per_th;
+	//Остаток
+	a[0].mtrx = rgb;
+	a[0].x = x;
+	a[0].start = 0;
+	if (thr_j)
+		a[0].end = thr_j + 1;
+	else 
+		a[0].end = str_per_th + 1;
+	a[0].max = max;
+	a[0].col_amount = 3;
+	a[0].s = sems + 1;
+	
+	ths = malloc(sizeof(pthread_t) * n_of_thr);
+	//Массив семафоров
+	IF_ERR(sems, NULL, "Malloc error", exit(errno););
+	for(i = 0; true; i++)
+	{
+		check = pthread_create(ths + i, NULL, sobel_in_th, a + i);
+		IF_ERR(check, -1, "Pthread_create error", exit(errno););
+		if (i == (n_of_thr - 1)) 
+			break;
+		a[i + 1].mtrx = rgb;
+		a[i + 1].x = x;
+		a[i + 1].start = a[i].start + a[i].end - 1;
+		a[i + 1].end = str_per_th;
+		a[i + 1].max = max;
+		a[i + 1].col_amount = 3;
+		a[i + 1].s = a[i].s + 1;
+	}
+	for(i = 0; i < n_of_thr; i++)
+	{
+		printf("T%d wait\n", i + 1);
+		pthread_join(ths[i], NULL);
+		printf("T%d OK\n", i + 1);
+	}
+	//Собираем потоки вместе
+	for(i = 0; i < (n_of_thr + 2); i++) {
+		sem_destroy(&sems[i].prv);
+		sem_destroy(&sems[i].nxt);
+	}
+	free(sems);
+	free(ths);
+	free(a);
+	//Освобождаем все, что было
+	//выделено для потоков
 	out_nm = malloc(strlen(input_file) + 5);
 	IF_ERR(out_nm, NULL, "Malloc error", exit(errno););
 	strcpy(out_nm, input_file);
@@ -319,17 +423,32 @@ int main(int argc, char *argv[])
 	char buf[2];
 
 	f = 0;
+	n_of_thr = 1;
+	//Изначально 1 поток
 	if (argc == 1) {
 		printf("Error: there is no arguments\n");
 		exit(EXIT_FAILURE);
 	}
 	//Проверяем а есть ли аргументы
-	if (argc > 2)
-		if (!strcmp(argv[2], "-n"))
-			f = 1;
-	//Флаг - использовать нормализацию
-	//вместо метода, который я не придумал
-	//как назвать
+	if (argc > 2) {
+		for (int i = 2; i < 4; i++)
+			if (argv[2][0] == '-')
+				switch (argv[2][1]) {
+				case 'n':
+					if (!f)
+						f = 1;
+					//Флаг - использовать нормализацию
+					//вместо простого откручивания яркости
+					//до максимума
+					break;
+				case 'j':
+					if (n_of_thr == 1)
+						n_of_thr = atoi(argv[i] + 2);
+						if (n_of_thr < 1)
+							n_of_thr = 1;
+					//Количество потоков
+				}
+	}
 	input = open(argv[1], O_RDONLY);
 	IF_ERR(input, -1, argv[1], exit(errno););
 	//Открываем файл, если он есть
