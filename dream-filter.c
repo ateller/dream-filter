@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <math.h>
+#include <time.h>
 
 //Я не настолько хорошо знаю английский,
 //чтобы писать на нем комментарии и не
@@ -47,7 +48,7 @@
 //байт из файла
 int f, n_of_thr;
 
-struct sems_for_neigh {sem_t prv; sem_t nxt;};
+struct sems_for_neigh {sem_t prv; sem_t nxt; };
 
 struct args {short ***mtrx;
 int x;
@@ -55,7 +56,7 @@ int start;
 int end;
 int max;
 int col_amount;
-struct sems_for_neigh *s;};
+struct sems_for_neigh *s; };
 
 int read_until_space(int input, char *buf, char space, char i)
 {
@@ -103,7 +104,7 @@ short **sobel(short **m, int x, int y, int *new_max)
 		//В массиве 3 места. Пишем по индексу
 		//остатку от деления номера текущей
 		//строки на 3
-		
+
 		temp[tempindex] = malloc(sizeof(short *) * (x + 1));
 		//Память под новую строку
 		IF_ERR(temp[tempindex], NULL, "Malloc error", exit(errno););
@@ -141,14 +142,15 @@ short **sobel(short **m, int x, int y, int *new_max)
 		default:
 			free(m[i - 2]);
 			m[i - 2] = temp[(i - 2) % 3];
-			
+
 			if (i == (y - 1)) {
 				free(m[i - 1]);
 				m[i - 1] = temp[(i - 1) % 3];
 				borders[1] = temp[tempindex];
 			}
-			//Если мы на последней строке, то
-			//и прошлую. А еще сохраняем индекс
+			//Если мы на последней строке,
+			//то и прошлую. А еще
+			//сохраняем индекс
 			break;
 		}
 		//Заменяем в картинке старую строку
@@ -167,7 +169,8 @@ void dim(short **m, int x, int y, int max, int new_max)
 			for (int j = 1; j < x; j++)
 				m[i][j] = (((float) m[i][j]) / new_max) * max;
 	} else {
-	//Если яркость писеля больше максимальной,
+	//Если яркость писеля больше
+	//максимальной,
 	//откручивам до максимальной
 		for (int i = 0; i < y; i++)
 			for (int j = 1; j < x; j++)
@@ -180,13 +183,13 @@ void *sobel_in_th(void *pointer)
 {
 	struct args *a = (struct args *) pointer;
 	short **borders;
-	
+
 	IF_ERR(sem_init(&(a->s->prv), 1, 0), -1, "Sem_init", exit(errno););
 	IF_ERR(sem_init(&(a->s->nxt), 1, 0), -1, "Sem_init", exit(errno););
 	//Инициализируем свои семафоры
-	for (int i = 0; i < a->col_amount; i++)
-	{
+	for (int i = 0; i < a->col_amount; i++) {
 		int max = 0;
+
 		borders = sobel(a->mtrx[i] + a->start, a->x, a->end, &max);
 		//Фильтрация возвращает указатели
 		//на первую и последниюю
@@ -196,29 +199,35 @@ void *sobel_in_th(void *pointer)
 		IF_ERR(sem_post(&a->s->nxt), -1, "Sem_post", exit(errno););
 		//Говорим соседям, что нам их края
 		//больше не нужны
+
 		IF_ERR(sem_wait(&(a->s + 1)->prv), -1, "Semwait", exit(errno););
-		//Ждем, когда сосед сверху перестанет
+		//Ждем, когда сосед сверху закончит
 		//хотеть нашу последнюю строку
-		if (a->end > 2)
-		//Если потоков больше, чем строк,
-		//это один и тот же указатель
 		free(a->mtrx[i][a->end + a->start - 1]);
 		a->mtrx[i][a->end + a->start - 1] = borders[1];
 		//Заменяем последнуюю строку
-		
+
 		IF_ERR(sem_wait(&(a->s - 1)->nxt), -1, "Semwait", exit(errno););
-		//Ждем, когда сосед снизу перестанет
+		//Ждем, когда сосед снизу закончит
 		//хотеть нашу первую строку
 		free(a->mtrx[i][a->start + 1]);
 		a->mtrx[i][a->start + 1] = borders[0];
 		//Заменяем первую строку на новую
+
 		free(borders);
 		//Освобождаем пару
+
 		dim(a->mtrx[i] + a->start + 1, a->x, a->end - 1, a->max, max);
 		//Откручиваем яркость
 	}
 }
 
+long int delta_time(struct timespec s, struct timespec f)
+{
+	long int result = (f.tv_sec * 1000000000) + f.tv_nsec;
+
+	return result - ((s.tv_sec * 1000000000) + s.tv_nsec);
+}
 
 void filter_p6(int input, char *input_file)
 {
@@ -227,7 +236,7 @@ void filter_p6(int input, char *input_file)
 	//имя нового файла
 	int x, y, i, out, max, str_per_th, thr_j;
 	//Размеры файла, счетчик,
-	//выходной дескриптор, 
+	//выходной дескриптор,
 	//максимальная яркость,
 	//Количество строк на поток
 	short **rgb[3];
@@ -240,6 +249,8 @@ void filter_p6(int input, char *input_file)
 	//Массив аргументов
 	pthread_t *ths;
 	//Массив потоков
+	struct timespec start, finish;
+	//Замер
 
 	check = read(input, buf, 1);
 	IF_ERR(check, -1, "Read error", exit(errno););
@@ -269,7 +280,7 @@ void filter_p6(int input, char *input_file)
 	max = read_until_space(input, buf, '\n', 0);
 	//Строковые представления разрешения
 	//сохраним, нам их на выход писать потом
-	
+
 	//Это была загрузка параметров файла
 	x += 2;
 	y += 2;
@@ -327,38 +338,48 @@ void filter_p6(int input, char *input_file)
 				//пикселей, чем обещано
 				//но это не должно помешать
 	}
-	
+
 	//Это была загрузка файла и подготовка
 	/*
-	for (i = 0; i < 3; i++) {
-		borders = sobel(rgb[i], x, y, max);
-		//Фильтрация возвращает указатели
-		//на первую и последниюю
-		//новую строку картинки,
-		//их она не заменяет на новое сама
-		free(rgb[i][1]);
-		rgb[i][1] = borders[0];
-		//Заменяем первую строку на новую
-		free(rgb[i][y - 1]);
-		rgb[i][y - 1] = borders[1];
-		//Заменяем последнуюю строку
-		free(borders);
-	//Фильтруем
-	}
-	*/
+	 * for (i = 0; i < 3; i++) {
+	 *	borders = sobel(rgb[i], x, y, max);
+	 *	//Фильтрация возвращает указатели
+	 *	//на первую и последниюю
+	 *	//новую строку картинки,
+	 *	//их она не заменяет на новое сама
+	 *	free(rgb[i][1]);
+	 *	rgb[i][1] = borders[0];
+	 *	//Заменяем первую строку на новую
+	 *	free(rgb[i][y - 1]);
+	 *	rgb[i][y - 1] = borders[1];
+	 *	//Заменяем последнуюю строку
+	 *	free(borders);
+	 * //Фильтруем
+	 * }
+	 */
 	//Не больше потоков, чем строк в файле
 	str_per_th = ((y - 1) / n_of_thr);
 	//Строк на поток
 	if (str_per_th < 4) {
-		 str_per_th = 4;
-		 n_of_thr = 1;
+		n_of_thr = 1;
+		str_per_th = 4;
 	}
 	thr_j = (y - 1) % str_per_th;
 	//Остаток
-	if((str_per_th * n_of_thr) < y - 1 - thr_j)
+	if ((str_per_th * n_of_thr) < y - 1 - thr_j) {
 		n_of_thr = (y - 1 - thr_j) / str_per_th;
-	//Может случиться так, что
-	//Потоков не хватает
+		thr_j = (y - 1) % str_per_th;
+		if (thr_j)
+			n_of_thr++;
+	} else {
+		if ((str_per_th * n_of_thr) < y - 1)
+			str_per_th++;
+		for (; (str_per_th * (n_of_thr - 1)) >= y;)
+			n_of_thr--;
+		thr_j = (y - 1) % str_per_th;
+	}
+	//Если строки не кратны
+	//потокам
 	printf("Number of threads: %d\n", n_of_thr);
 	printf("Str per thread: %d, Остаток: %d\n", str_per_th, thr_j);
 	sems = malloc(sizeof(struct sems_for_neigh) * (n_of_thr + 2));
@@ -379,7 +400,7 @@ void filter_p6(int input, char *input_file)
 	if (thr_j)
 		a[0].end = thr_j + 1;
 		//Первый поток заберет остаток
-	else 
+	else
 		a[0].end = str_per_th + 1;
 	//End - смещение последней строки
 	//от первой
@@ -389,19 +410,19 @@ void filter_p6(int input, char *input_file)
 	//Количство цветов (для ргб)
 	a[0].s = sems + 1;
 	//Свой семафор
-	
+
 	ths = malloc(sizeof(pthread_t) * n_of_thr);
 	//Массив адресов
 	IF_ERR(ths, NULL, "Malloc error", exit(errno););
-	for(i = 0; true; i++)
-	{
+	clock_gettime(CLOCK_REALTIME, &start);
+	for (i = 0; true; i++) {
 		check = pthread_create(ths + i, NULL, sobel_in_th, a + i);
 		//Создаем поток с теми аргументами
 		//которые есть
 		IF_ERR(check, -1, "Pthread_create error", exit(errno););
 
 		//printf ("i = %d, start = %d\n", i, a[i].start);
-		if (i == (n_of_thr - 1)) 
+		if (i == (n_of_thr - 1))
 			break;
 		//Выход из цикла
 		//Дальше готовим параметры
@@ -420,15 +441,15 @@ void filter_p6(int input, char *input_file)
 		a[i + 1].s = a[i].s + 1;
 		//Следующий семафор
 	}
-	for(i = 0; i < n_of_thr; i++)
-	//Потоки, обратно
-	{
+	for (i = 0; i < n_of_thr; i++) {
 		//printf("T%d wait\n", i + 1);
 		pthread_join(ths[i], NULL);
 		//printf("T%d OK\n", i + 1);
 	}
 	//Собираем потоки вместе
-	for(i = 0; i < (n_of_thr + 2); i++) {
+	clock_gettime(CLOCK_REALTIME, &finish);
+	printf("Time: %ld\n", delta_time(start, finish));
+	for (i = 0; i < (n_of_thr + 2); i++) {
 		sem_destroy(&sems[i].prv);
 		sem_destroy(&sems[i].nxt);
 		//Ломаем семафоры
@@ -438,7 +459,7 @@ void filter_p6(int input, char *input_file)
 	free(a);
 	//Освобождаем все, что было
 	//выделено для потоков
-	
+
 	out_nm = malloc(strlen(input_file) + 5);
 	IF_ERR(out_nm, NULL, "Malloc error", exit(errno););
 	strcpy(out_nm, input_file);
@@ -495,15 +516,17 @@ int main(int argc, char *argv[])
 				case 'n':
 					if (!f)
 						f = 1;
-					//Флаг - использовать нормализацию
-					//вместо простого откручивания яркости
-					//до максимума
+					//Флаг - использовать
+					//нормализацию
+					//вместо простого
+					//откручивания
+					//до максимума яркости
 					break;
 				case 'j':
 					if (n_of_thr == 1)
 						n_of_thr = atoi(argv[i] + 2);
-						if (n_of_thr < 1)
-							n_of_thr = 1;
+					if (n_of_thr < 1)
+						n_of_thr = 1;
 					//Количество потоков
 				}
 	}
