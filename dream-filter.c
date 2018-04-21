@@ -41,9 +41,6 @@
 
 #define TEMP_PIXEL m[i + gi - 1][j + gj - 1]
 //Иначе не лезет просто в 80
-#define FIRST stripes_1y[0]
-#define LAST stripes_1y[1]
-//Первая и последняя новые строки
 
 //Чтобы читать число от 0 до
 //65535 в буфер, размером 6
@@ -87,21 +84,21 @@ int read_until_space(int input, char *buf, char space, char i)
 	return value;
 }
 
-short **sobel(short **m, int x, int y, int max)
+short **sobel(short **m, int x, int y, int *new_max)
 {
-	short new_max = 0, op[3][3] = {
+	short op[3][3] = {
 	{ -1, -2, -1}
 	, {0,  0,  0}
 	, {1,  2,  1} };
 	short *temp[3];
 	//Массив под указатели на последние 3
 	//новые строки
-	short **stripes_1y = (short **) malloc(sizeof(short *) * 2);
+	short **borders = (short **) malloc(sizeof(short *) * 2);
 	//Массив под указатели на первую
 	//и последнюю строку
 
-	IF_ERR(stripes_1y, NULL, "Malloc error", exit(errno););
-	for (int i = 1; true; i++) {
+	IF_ERR(borders, NULL, "Malloc error", exit(errno););
+	for (int i = 1; i < y; i++) {
 		int tempindex = i % 3;
 		//В массиве 3 места. Пишем по индексу
 		//остатку от деления номера текущей
@@ -121,8 +118,11 @@ short **sobel(short **m, int x, int y, int max)
 				}
 			g = sqrt((double)(gx * gx + gy * gy));
 			//Находим итог
-			if (g > new_max)
-				new_max = g;
+			if (g > 65535)
+				g = 65535;
+			//Да, костыль, но память нужна
+			if (g > *new_max)
+				*new_max = g;
 			//В итоге яркость может стать
 			//больше, чем максимальная,
 			//которая была раньше
@@ -130,7 +130,7 @@ short **sobel(short **m, int x, int y, int max)
 		}
 		switch (i) {
 		case 1:
-			FIRST = temp[1];
+			borders[0] = temp[1];
 			break;
 		//Если у нас первая строка,
 		//указатель на нее надо сохранить
@@ -141,72 +141,81 @@ short **sobel(short **m, int x, int y, int max)
 		default:
 			free(m[i - 2]);
 			m[i - 2] = temp[(i - 2) % 3];
+			
+			if (i == (y - 1)) {
+				free(m[i - 1]);
+				m[i - 1] = temp[(i - 1) % 3];
+				borders[1] = temp[tempindex];
+			}
+			//Если мы на последней строке, то
+			//и прошлую. А еще сохраняем индекс
 			break;
 		}
 		//Заменяем в картинке старую строку
 		//на новую. Заменяем позапрошлую
 		//строку (она больше не нужна)
-		if (i == (y - 1)) {
-			free(m[i - 1]);
-			m[i - 1] = temp[(i - 1) % 3];
-			LAST = temp[tempindex];
-			break;
-		}
-		//Если мы на последней строке, то
-		//и прошлую. А еще сохраняем индекс
 	}
-	printf("Maximum brightness = %d\n", new_max);
-	//Поправим яркость
+	return borders;
+}
+
+//Поправить яркость
+void dim(short **m, int x, int y, int max, int new_max)
+{
 	if (f) {
-		for (int j = 1; j < x; j++) {
-			FIRST[j] = (((float) FIRST[j]) / new_max) * max;
-			LAST[j] = (((float) LAST[j]) / new_max) * max;
-		}
-		y--;
-		for (int i = 2; i < y; i++)
+	//Нормализация
+		for (int i = 0; i < y; i++)
 			for (int j = 1; j < x; j++)
 				m[i][j] = (((float) m[i][j]) / new_max) * max;
 	} else {
-		for (int j = 1; j < x; j++) {
-			if (FIRST[j] > max)
-				FIRST[j] = max;
-			if (LAST[j] > max)
-				LAST[j] = max;
-		}
-		y--;
-		for (int i = 2; i < y; i++)
+	//Если яркость писеля больше максимальной,
+	//откручивам до максимальной
+		for (int i = 0; i < y; i++)
 			for (int j = 1; j < x; j++)
 				if (m[i][j] > max)
 					m[i][j] = max;
 	}
-	return stripes_1y;
 }
 
 void *sobel_in_th(void *pointer)
 {
 	struct args *a = (struct args *) pointer;
-	short **stripes_1y;
+	short **borders;
 	
 	IF_ERR(sem_init(&(a->s->prv), 1, 0), -1, "Sem_init", exit(errno););
 	IF_ERR(sem_init(&(a->s->nxt), 1, 0), -1, "Sem_init", exit(errno););
+	//Инициализируем свои семафоры
 	for (int i = 0; i < a->col_amount; i++)
 	{
-		stripes_1y = sobel(a->mtrx[i] + a->start, a->x, a->end, a->max);
+		int max = 0;
+		borders = sobel(a->mtrx[i] + a->start, a->x, a->end, &max);
 		//Фильтрация возвращает указатели
 		//на первую и последниюю
 		//новую строку картинки,
 		//их она не заменяет на новое сама
-		sem_post(&a->s->prv);
-		sem_post(&a->s->nxt);
-		sem_wait(&(a->s - 1)->nxt);
-		free(a->mtrx[i][a->start + 1]);
-		a->mtrx[i][a->start + 1] = stripes_1y[0];
-		//Заменяем первую строку на новую
-		sem_wait(&(a->s + 1)->prv);
+		IF_ERR(sem_post(&a->s->prv), -1, "Sem_post", exit(errno););
+		IF_ERR(sem_post(&a->s->nxt), -1, "Sem_post", exit(errno););
+		//Говорим соседям, что нам их края
+		//больше не нужны
+		IF_ERR(sem_wait(&(a->s + 1)->prv), -1, "Semwait", exit(errno););
+		//Ждем, когда сосед сверху перестанет
+		//хотеть нашу последнюю строку
+		if (a->end > 2)
+		//Если потоков больше, чем строк,
+		//это один и тот же указатель
 		free(a->mtrx[i][a->end + a->start - 1]);
-		a->mtrx[i][a->end + a->start - 1] = stripes_1y[1];
+		a->mtrx[i][a->end + a->start - 1] = borders[1];
 		//Заменяем последнуюю строку
-		free(stripes_1y);
+		
+		IF_ERR(sem_wait(&(a->s - 1)->nxt), -1, "Semwait", exit(errno););
+		//Ждем, когда сосед снизу перестанет
+		//хотеть нашу первую строку
+		free(a->mtrx[i][a->start + 1]);
+		a->mtrx[i][a->start + 1] = borders[0];
+		//Заменяем первую строку на новую
+		free(borders);
+		//Освобождаем пару
+		dim(a->mtrx[i] + a->start + 1, a->x, a->end - 1, a->max, max);
+		//Откручиваем яркость
 	}
 }
 
@@ -214,13 +223,23 @@ void *sobel_in_th(void *pointer)
 void filter_p6(int input, char *input_file)
 {
 	char buf[6], check, *out_nm, strx[6], stry[6];
+	//Буферы для чтения из файла и
+	//имя нового файла
 	int x, y, i, out, max, str_per_th, thr_j;
-	short **stripes_1y;
+	//Размеры файла, счетчик,
+	//выходной дескриптор, 
+	//максимальная яркость,
+	//Количество строк на поток
 	short **rgb[3];
+	//По матрице на канал
 	char pix_size;
+	//Размер пикселя
 	struct sems_for_neigh *sems;
+	//Массив семафоров
 	struct args *a;
+	//Массив аргументов
 	pthread_t *ths;
+	//Массив потоков
 
 	check = read(input, buf, 1);
 	IF_ERR(check, -1, "Read error", exit(errno););
@@ -229,6 +248,7 @@ void filter_p6(int input, char *input_file)
 	//перевод строки
 	check = read(input, strx, 1);
 	IF_ERR(check, -1, "Read error", exit(errno););
+	IS_BAD(!check);
 	//Дальше может быть комментарий
 	if (strx[0] == '#') {
 		do {
@@ -249,6 +269,8 @@ void filter_p6(int input, char *input_file)
 	max = read_until_space(input, buf, '\n', 0);
 	//Строковые представления разрешения
 	//сохраним, нам их на выход писать потом
+	
+	//Это была загрузка параметров файла
 	x += 2;
 	y += 2;
 	//Чтобы с рамкой в 1 пиксель
@@ -305,25 +327,40 @@ void filter_p6(int input, char *input_file)
 				//пикселей, чем обещано
 				//но это не должно помешать
 	}
+	
+	//Это была загрузка файла и подготовка
 	/*
 	for (i = 0; i < 3; i++) {
-		stripes_1y = sobel(rgb[i], x, y, max);
+		borders = sobel(rgb[i], x, y, max);
 		//Фильтрация возвращает указатели
 		//на первую и последниюю
 		//новую строку картинки,
 		//их она не заменяет на новое сама
 		free(rgb[i][1]);
-		rgb[i][1] = stripes_1y[0];
+		rgb[i][1] = borders[0];
 		//Заменяем первую строку на новую
 		free(rgb[i][y - 1]);
-		rgb[i][y - 1] = stripes_1y[1];
+		rgb[i][y - 1] = borders[1];
 		//Заменяем последнуюю строку
-		free(stripes_1y);
+		free(borders);
 	//Фильтруем
 	}
 	*/
-	if (n_of_thr > (y - 1))
-		n_of_thr = y - 1;
+	//Не больше потоков, чем строк в файле
+	str_per_th = ((y - 1) / n_of_thr);
+	//Строк на поток
+	if (str_per_th < 4) {
+		 str_per_th = 4;
+		 n_of_thr = 1;
+	}
+	thr_j = (y - 1) % str_per_th;
+	//Остаток
+	if((str_per_th * n_of_thr) < y - 1 - thr_j)
+		n_of_thr = (y - 1 - thr_j) / str_per_th;
+	//Может случиться так, что
+	//Потоков не хватает
+	printf("Number of threads: %d\n", n_of_thr);
+	printf("Str per thread: %d, Остаток: %d\n", str_per_th, thr_j);
 	sems = malloc(sizeof(struct sems_for_neigh) * (n_of_thr + 2));
 	//Массив семафоров
 	IF_ERR(sems, NULL, "Malloc error", exit(errno););
@@ -331,56 +368,77 @@ void filter_p6(int input, char *input_file)
 	//Массив параметров
 	IF_ERR(a, NULL, "Malloc error", exit(errno););
 	IF_ERR(sem_init(&sems[0].nxt, 1, 3), -1, "Sem_init", exit(errno););
-	IF_ERR(sem_init(&sems[n_of_thr + 1].prv, 1, 3), -1, "Error", exit(errno););
+	IF_ERR(sem_init(&sems[n_of_thr + 1].prv, 1, 3), -1, "Se", exit(errno););
 	//Два крайних уже на финише
-	str_per_th = ((y - 1) / n_of_thr) + 0.5;
-	//Строк на поток
-	thr_j = (y - 1) % str_per_th;
-	//Остаток
 	a[0].mtrx = rgb;
+	//Матрицу
 	a[0].x = x;
+	//Ширину
 	a[0].start = 0;
+	//Начало
 	if (thr_j)
 		a[0].end = thr_j + 1;
+		//Первый поток заберет остаток
 	else 
 		a[0].end = str_per_th + 1;
+	//End - смещение последней строки
+	//от первой
 	a[0].max = max;
+	//Макс. яркость
 	a[0].col_amount = 3;
+	//Количство цветов (для ргб)
 	a[0].s = sems + 1;
+	//Свой семафор
 	
 	ths = malloc(sizeof(pthread_t) * n_of_thr);
-	//Массив семафоров
-	IF_ERR(sems, NULL, "Malloc error", exit(errno););
+	//Массив адресов
+	IF_ERR(ths, NULL, "Malloc error", exit(errno););
 	for(i = 0; true; i++)
 	{
 		check = pthread_create(ths + i, NULL, sobel_in_th, a + i);
+		//Создаем поток с теми аргументами
+		//которые есть
 		IF_ERR(check, -1, "Pthread_create error", exit(errno););
+
+		//printf ("i = %d, start = %d\n", i, a[i].start);
 		if (i == (n_of_thr - 1)) 
 			break;
+		//Выход из цикла
+		//Дальше готовим параметры
+		//для следующего потока
 		a[i + 1].mtrx = rgb;
 		a[i + 1].x = x;
 		a[i + 1].start = a[i].start + a[i].end - 1;
-		a[i + 1].end = str_per_th;
+		//Старт следующиего потока - наша
+		//последняя строка
+		a[i + 1].end = str_per_th + 1;
+		//У нас n строк, а n + 1-я
+		//это наш финиш и чья-то первая
+		//строка
 		a[i + 1].max = max;
 		a[i + 1].col_amount = 3;
 		a[i + 1].s = a[i].s + 1;
+		//Следующий семафор
 	}
 	for(i = 0; i < n_of_thr; i++)
+	//Потоки, обратно
 	{
-		printf("T%d wait\n", i + 1);
+		//printf("T%d wait\n", i + 1);
 		pthread_join(ths[i], NULL);
-		printf("T%d OK\n", i + 1);
+		//printf("T%d OK\n", i + 1);
 	}
 	//Собираем потоки вместе
 	for(i = 0; i < (n_of_thr + 2); i++) {
 		sem_destroy(&sems[i].prv);
 		sem_destroy(&sems[i].nxt);
+		//Ломаем семафоры
 	}
 	free(sems);
 	free(ths);
 	free(a);
 	//Освобождаем все, что было
 	//выделено для потоков
+	
 	out_nm = malloc(strlen(input_file) + 5);
 	IF_ERR(out_nm, NULL, "Malloc error", exit(errno););
 	strcpy(out_nm, input_file);
@@ -429,7 +487,7 @@ int main(int argc, char *argv[])
 		printf("Error: there is no arguments\n");
 		exit(EXIT_FAILURE);
 	}
-	//Проверяем а есть ли аргументы
+	//Проверяем, а есть ли аргументы
 	if (argc > 2) {
 		for (int i = 2; i < 4; i++)
 			if (argv[2][0] == '-')
