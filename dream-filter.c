@@ -58,7 +58,7 @@ int max;
 int col_amount;
 struct sems_for_neigh *s; };
 
-int read_until_space(int input, char *buf, char space, char i)
+int read_until_space(int input, char *buf, char space, int i)
 {
 	int value;
 
@@ -220,6 +220,7 @@ void *sobel_in_th(void *pointer)
 		dim(a->mtrx[i] + a->start + 1, a->x, a->end - 1, a->max, max);
 		//Откручиваем яркость
 	}
+	return NULL;
 }
 
 long int delta_time(struct timespec s, struct timespec f)
